@@ -398,7 +398,7 @@ while True:
 
 ## 📞 联系方式
 
-- 💬 提交Issue: [GitHub Issues](https://github.com/injoyai/tdx/issues)
+- 💬 提交Issue: [GitHub Issues](https://github.com/oficcejo/tdx-api/issues)
 - 📧 邮件: [联系我们](mailto:your-email@example.com)
 
 ---
@@ -409,13 +409,6 @@ while True:
 
 ---
 
-<div align="center">
-
-**Made with ❤️ by injoyai**
-
-[⬆ 返回顶部](#-tdx股票数据查询系统)
-
-</div>
 
 
 
