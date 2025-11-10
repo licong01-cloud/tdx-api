@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/injoyai/tdx"
 	"github.com/injoyai/tdx/protocol"
 )
 
@@ -23,55 +25,41 @@ func handleGetCodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &CodesResponse{
-		Exchanges: make(map[string]int),
-		Codes:     []map[string]string{},
+		Exchanges: map[string]int{
+			"sh": 0,
+			"sz": 0,
+			"bj": 0,
+		},
+		Codes: []map[string]string{},
 	}
 
-	// 确定要查询的交易所
-	exchanges := []protocol.Exchange{}
-	switch strings.ToLower(exchange) {
-	case "sh":
-		exchanges = []protocol.Exchange{protocol.ExchangeSH}
-	case "sz":
-		exchanges = []protocol.Exchange{protocol.ExchangeSZ}
-	case "bj":
-		exchanges = []protocol.Exchange{protocol.ExchangeBJ}
-	default: // all
-		exchanges = []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ}
+	allCodes, err := getAllCodeModels()
+	if err != nil {
+		errorResponse(w, "获取代码列表失败: "+err.Error())
+		return
 	}
+	targetExchange := strings.ToLower(exchange)
 
-	// 获取所有交易所的代码
-	for _, ex := range exchanges {
-		codeResp, err := client.GetCodeAll(ex)
-		if err != nil {
+	for _, model := range allCodes {
+		fullCode := model.FullCode()
+		if !protocol.IsStock(fullCode) {
+			continue
+		}
+		exName := strings.ToLower(model.Exchange)
+		resp.Exchanges[exName]++
+
+		if targetExchange != "" && targetExchange != "all" && targetExchange != exName {
 			continue
 		}
 
-		exName := ""
-		switch ex {
-		case protocol.ExchangeSH:
-			exName = "sh"
-		case protocol.ExchangeSZ:
-			exName = "sz"
-		case protocol.ExchangeBJ:
-			exName = "bj"
-		}
-
-		count := 0
-		for _, v := range codeResp.List {
-			// 只返回股票
-			if protocol.IsStock(v.Code) {
-				resp.Codes = append(resp.Codes, map[string]string{
-					"code":     v.Code,
-					"name":     v.Name,
-					"exchange": exName,
-				})
-				count++
-			}
-		}
-		resp.Exchanges[exName] = count
-		resp.Total += count
+		resp.Codes = append(resp.Codes, map[string]string{
+			"code":     model.Code,
+			"name":     model.Name,
+			"exchange": exName,
+		})
 	}
+
+	resp.Total = len(resp.Codes)
 
 	successResponse(w, resp)
 }
@@ -278,48 +266,28 @@ func handleGetMarketStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := &MarketStats{}
+	allCodes, err := getAllCodeModels()
+	if err != nil {
+		errorResponse(w, "获取市场统计失败: "+err.Error())
+		return
+	}
 
-	// 获取各市场数据
-	for _, ex := range []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ} {
-		codeResp, err := client.GetCodeAll(ex)
-		if err != nil {
+	for _, model := range allCodes {
+		fullCode := model.FullCode()
+		if !protocol.IsStock(fullCode) {
 			continue
 		}
-
-		// 统计涨跌情况
-		total, up, down, flat := 0, 0, 0, 0
-		for _, code := range codeResp.List {
-			if !protocol.IsStock(code.Code) {
-				continue
-			}
-			total++
-
-			// 根据LastPrice判断涨跌（简化版）
-			if code.LastPrice > 0 {
-				up++
-			} else if code.LastPrice < 0 {
-				down++
-			} else {
-				flat++
-			}
-		}
-
-		switch ex {
-		case protocol.ExchangeSH:
-			stats.SH.Total = total
-			stats.SH.Up = up
-			stats.SH.Down = down
-			stats.SH.Flat = flat
-		case protocol.ExchangeSZ:
-			stats.SZ.Total = total
-			stats.SZ.Up = up
-			stats.SZ.Down = down
-			stats.SZ.Flat = flat
-		case protocol.ExchangeBJ:
-			stats.BJ.Total = total
-			stats.BJ.Up = up
-			stats.BJ.Down = down
-			stats.BJ.Flat = flat
+		lastPrice := model.LastPrice
+		switch strings.ToLower(model.Exchange) {
+		case "sh":
+			stats.SH.Total++
+			classifyPrice(lastPrice, &stats.SH.Up, &stats.SH.Down, &stats.SH.Flat)
+		case "sz":
+			stats.SZ.Total++
+			classifyPrice(lastPrice, &stats.SZ.Up, &stats.SZ.Down, &stats.SZ.Flat)
+		case "bj":
+			stats.BJ.Total++
+			classifyPrice(lastPrice, &stats.BJ.Up, &stats.BJ.Down, &stats.BJ.Flat)
 		}
 	}
 
@@ -353,4 +321,48 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		"status": "healthy",
 		"time":   fmt.Sprintf("%d", 1730617200),
 	})
+}
+
+func getAllCodeModels() ([]*tdx.CodeModel, error) {
+	if tdx.DefaultCodes != nil {
+		if list, err := tdx.DefaultCodes.GetCodes(true); err == nil && len(list) > 0 {
+			return list, nil
+		} else if err != nil {
+			log.Printf("从数据库读取代码失败: %v", err)
+		}
+	}
+
+	aggregate := []*tdx.CodeModel{}
+	for _, ex := range []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ} {
+		resp, err := client.GetCodeAll(ex)
+		if err != nil || resp == nil {
+			if err != nil {
+				log.Printf("从服务器获取代码失败(%s): %v", ex.String(), err)
+			}
+			continue
+		}
+		for _, v := range resp.List {
+			aggregate = append(aggregate, &tdx.CodeModel{
+				Name:      v.Name,
+				Code:      v.Code,
+				Exchange:  ex.String(),
+				Multiple:  v.Multiple,
+				Decimal:   v.Decimal,
+				LastPrice: v.LastPrice,
+			})
+		}
+	}
+
+	return aggregate, nil
+}
+
+func classifyPrice(price float64, up, down, flat *int) {
+	switch {
+	case price > 0:
+		*up++
+	case price < 0:
+		*down++
+	default:
+		*flat++
+	}
 }

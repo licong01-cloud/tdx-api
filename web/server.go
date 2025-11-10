@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/injoyai/tdx"
@@ -22,6 +24,21 @@ func init() {
 		log.Fatalf("连接服务器失败: %v", err)
 	}
 	log.Println("成功连接到通达信服务器")
+
+	// 初始化代码缓存
+	if err = os.MkdirAll(tdx.DefaultDatabaseDir, 0755); err != nil {
+		log.Printf("创建数据目录失败: %v", err)
+	}
+	if codes, err := tdx.NewCodesSqlite(client); err != nil {
+		log.Printf("初始化代码库失败: %v", err)
+	} else {
+		tdx.DefaultCodes = codes
+		if err := tdx.DefaultCodes.Update(); err != nil {
+			log.Printf("更新代码库失败: %v", err)
+		} else {
+			log.Printf("已加载股票代码，共 %d 条", len(tdx.DefaultCodes.Map))
+		}
+	}
 }
 
 // Response 统一响应结构
@@ -53,13 +70,19 @@ func errorResponse(w http.ResponseWriter, message string) {
 
 // 获取五档行情
 func handleGetQuote(w http.ResponseWriter, r *http.Request) {
-	code := r.URL.Query().Get("code")
-	if code == "" {
+	codeParam := r.URL.Query().Get("code")
+	if codeParam == "" {
 		errorResponse(w, "股票代码不能为空")
 		return
 	}
 
-	quotes, err := client.GetQuote(code)
+	codes := splitCodes(codeParam)
+	if len(codes) == 0 {
+		errorResponse(w, "股票代码不能为空")
+		return
+	}
+
+	quotes, err := client.GetQuote(codes...)
 	if err != nil {
 		errorResponse(w, fmt.Sprintf("获取行情失败: %v", err))
 		return
@@ -288,17 +311,26 @@ func handleGetMinute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if date == "" {
-		date = time.Now().Format("20060102")
-	}
-
-	resp, err := client.GetHistoryMinute(date, code)
+	resp, usedDate, err := getMinuteWithFallback(code, date)
 	if err != nil {
 		errorResponse(w, fmt.Sprintf("获取分时数据失败: %v", err))
 		return
 	}
 
-	successResponse(w, resp)
+	if resp == nil {
+		successResponse(w, map[string]interface{}{
+			"date":  usedDate,
+			"Count": 0,
+			"List":  []interface{}{},
+		})
+		return
+	}
+
+	successResponse(w, map[string]interface{}{
+		"date":  usedDate,
+		"Count": resp.Count,
+		"List":  resp.List,
+	})
 }
 
 // 获取分时成交
@@ -337,48 +369,42 @@ func handleSearchCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 获取所有股票代码
-	codes := []map[string]string{}
+	keywordUpper := strings.ToUpper(keyword)
+	results := []map[string]string{}
+	seen := map[string]struct{}{}
 
-	for _, ex := range []protocol.Exchange{protocol.ExchangeSH, protocol.ExchangeSZ, protocol.ExchangeBJ} {
-		resp, err := client.GetCodeAll(ex)
-		if err != nil {
+	codeModels, err := getAllCodeModels()
+	if err != nil {
+		errorResponse(w, "搜索失败: "+err.Error())
+		return
+	}
+
+	for _, model := range codeModels {
+		fullCode := model.FullCode()
+		if !protocol.IsStock(fullCode) {
 			continue
 		}
-		for _, v := range resp.List {
-			// 只返回股票（过滤指数等）
-			if protocol.IsStock(v.Code) {
-				if len(keyword) > 0 {
-					// 简单的模糊匹配
-					if contains(v.Code, keyword) || contains(v.Name, keyword) {
-						codes = append(codes, map[string]string{
-							"code": v.Code,
-							"name": v.Name,
-						})
-					}
-				}
-			}
-			// 限制返回数量
-			if len(codes) >= 50 {
-				break
-			}
+		if _, ok := seen[model.Code]; ok {
+			continue
 		}
-		if len(codes) >= 50 {
+
+		codeUpper := strings.ToUpper(model.Code)
+		nameUpper := strings.ToUpper(model.Name)
+		if strings.Contains(codeUpper, keywordUpper) || strings.Contains(nameUpper, keywordUpper) {
+			results = append(results, map[string]string{
+				"code":     model.Code,
+				"name":     model.Name,
+				"exchange": strings.ToLower(model.Exchange),
+			})
+			seen[model.Code] = struct{}{}
+		}
+
+		if len(results) >= 50 {
 			break
 		}
 	}
 
-	successResponse(w, codes)
-}
-
-// 简单的字符串包含判断（不区分大小写）
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	successResponse(w, results)
 }
 
 // 获取股票基本信息（整合多个接口）
@@ -410,12 +436,66 @@ func handleGetStockInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. 获取今日分时数据
-	minute, err := client.GetHistoryMinute(time.Now().Format("20060102"), code)
-	if err == nil {
-		result["minute"] = minute
+	minute, minuteDate, err := getMinuteWithFallback(code, "")
+	if err == nil && minute != nil {
+		result["minute"] = map[string]interface{}{
+			"date":  minuteDate,
+			"Count": minute.Count,
+			"List":  minute.List,
+		}
 	}
 
 	successResponse(w, result)
+}
+
+func splitCodes(param string) []string {
+	parts := strings.Split(param, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		code := strings.TrimSpace(p)
+		if code != "" {
+			result = append(result, code)
+		}
+	}
+	return result
+}
+
+func getMinuteWithFallback(code, date string) (*protocol.MinuteResp, string, error) {
+	if date != "" {
+		resp, err := client.GetHistoryMinute(date, code)
+		return resp, date, err
+	}
+
+	today := time.Now()
+	const maxLookback = 10
+
+	var lastResp *protocol.MinuteResp
+	var lastDate string
+	var lastErr error
+
+	for i := 0; i < maxLookback; i++ {
+		currentDate := today.AddDate(0, 0, -i).Format("20060102")
+		resp, err := client.GetHistoryMinute(currentDate, code)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp != nil {
+			if len(resp.List) > 0 && resp.Count > 0 {
+				return resp, currentDate, nil
+			}
+			if lastResp == nil {
+				lastResp = resp
+				lastDate = currentDate
+			}
+		}
+	}
+
+	if lastResp != nil {
+		return lastResp, lastDate, nil
+	}
+
+	return nil, "", lastErr
 }
 
 func main() {
@@ -429,6 +509,13 @@ func main() {
 	http.HandleFunc("/api/trade", handleGetTrade)
 	http.HandleFunc("/api/search", handleSearchCode)
 	http.HandleFunc("/api/stock-info", handleGetStockInfo)
+	http.HandleFunc("/api/codes", handleGetCodes)
+	http.HandleFunc("/api/batch-quote", handleBatchQuote)
+	http.HandleFunc("/api/kline-history", handleGetKlineHistory)
+	http.HandleFunc("/api/index", handleGetIndex)
+	http.HandleFunc("/api/market-stats", handleGetMarketStats)
+	http.HandleFunc("/api/server-status", handleGetServerStatus)
+	http.HandleFunc("/api/health", handleHealthCheck)
 
 	port := ":8080"
 	log.Printf("服务启动成功，访问 http://localhost%s\n", port)
