@@ -169,9 +169,11 @@ func getQfqKlineDay(code string) (*protocol.KlineResp, error) {
 	// 使用同花顺API获取前复权数据
 	klines, err := extend.GetTHSDayKline(code, extend.THS_QFQ)
 	if err != nil {
-		// 如果同花顺API失败，降级使用通达信不复权数据
-		log.Printf("获取前复权数据失败，使用不复权数据: %v", err)
-		return client.GetKlineDay(code, 0, 800)
+		return nil, fmt.Errorf("获取前复权数据失败: %w", err)
+	}
+
+	if len(klines) == 0 {
+		return nil, fmt.Errorf("同花顺前复权数据为空")
 	}
 
 	// 转换为 protocol.KlineResp 格式
@@ -656,41 +658,15 @@ func splitCodes(param string) []string {
 }
 
 func getMinuteWithFallback(code, date string) (*protocol.MinuteResp, string, error) {
-	if date != "" {
-		resp, err := client.GetHistoryMinute(date, code)
-		return resp, date, err
+	target := strings.TrimSpace(date)
+	if target == "" {
+		target = time.Now().Format("20060102")
+		resp, err := client.GetMinute(code)
+		return resp, target, err
 	}
 
-	today := time.Now()
-	const maxLookback = 10
-
-	var lastResp *protocol.MinuteResp
-	var lastDate string
-	var lastErr error
-
-	for i := 0; i < maxLookback; i++ {
-		currentDate := today.AddDate(0, 0, -i).Format("20060102")
-		resp, err := client.GetHistoryMinute(currentDate, code)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp != nil {
-			if len(resp.List) > 0 && resp.Count > 0 {
-				return resp, currentDate, nil
-			}
-			if lastResp == nil {
-				lastResp = resp
-				lastDate = currentDate
-			}
-		}
-	}
-
-	if lastResp != nil {
-		return lastResp, lastDate, nil
-	}
-
-	return nil, "", lastErr
+	resp, err := client.GetHistoryMinute(target, code)
+	return resp, target, err
 }
 
 func main() {
@@ -719,7 +695,9 @@ func main() {
 	http.HandleFunc("/api/trade-history", handleGetTradeHistory)
 	http.HandleFunc("/api/trade-history/full", handleGetTradeHistoryFull)
 	http.HandleFunc("/api/minute-trade-all", handleGetMinuteTradeAll)
-	http.HandleFunc("/api/kline-all", handleGetKlineAll)
+	http.HandleFunc("/api/kline-all", handleGetKlineAllTDX)
+	http.HandleFunc("/api/kline-all/tdx", handleGetKlineAllTDX)
+	http.HandleFunc("/api/kline-all/ths", handleGetKlineAllTHS)
 	http.HandleFunc("/api/workday", handleGetWorkday)
 	http.HandleFunc("/api/workday/range", handleGetWorkdayRange)
 	http.HandleFunc("/api/income", handleGetIncome)

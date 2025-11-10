@@ -258,6 +258,12 @@ function displayKline(data, type) {
     if (!klineChart) {
         klineChart = echarts.init(chartDom);
     }
+    if (!chartDom.offsetWidth || !chartDom.offsetHeight) {
+        // 容器尚未正确展示时强制设置默认尺寸
+        chartDom.style.width = '100%';
+        chartDom.style.height = '600px';
+        klineChart.resize();
+    }
     
     // 准备数据
     const dates = [];
@@ -395,6 +401,7 @@ function displayKline(data, type) {
     };
     
     klineChart.setOption(option);
+    klineChart.resize();
 }
 
 // 加载分时数据
