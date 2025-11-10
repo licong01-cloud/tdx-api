@@ -98,7 +98,7 @@ GET /api/quote?code=000001,600519
 
 **接口**: `GET /api/kline`
 
-**描述**: 获取股票K线数据（OHLC + 成交量成交额）
+**描述**: 获取股票K线数据（OHLC + 成交量成交额）。日/周/月K线优先返回同花顺前复权数据，若第三方源不可用则自动回退到通达信原始数据；分钟级及小时级为原始数据。
 
 **请求参数**:
 | 参数 | 类型 | 必填 | 说明 |
@@ -160,7 +160,7 @@ GET /api/kline?code=600519&type=minute30
 
 **接口**: `GET /api/minute`
 
-**描述**: 获取股票分时走势数据
+**描述**: 获取股票分时走势数据；若查询日期或当日无数据，会自动回退至最近一个有交易数据的工作日，并在响应体中附加实际数据日期。
 
 **请求参数**:
 | 参数 | 类型 | 必填 | 说明 |
@@ -180,6 +180,7 @@ GET /api/minute?code=000001&date=20241103
   "code": 0,
   "message": "success",
   "data": {
+    "date": "20251107",   // 实际数据日期，可能与请求日期不同
     "Count": 240,
     "List": [
       {
@@ -339,9 +340,9 @@ GET /api/stock-info?code=000001
 ```
 
 **数据说明**:
-- 整合了三个接口的数据
-- 适合快速获取股票概览
-- 减少API调用次数
+- 整合了五档行情、最近30条日K线、最新分时数据
+- 分时数据自带 `date`、`Count`、`List` 字段，便于识别回退日期
+- 适合快速获取股票概览，减少API调用次数
 
 ---
 
@@ -473,6 +474,28 @@ GET /api/kline-history?code=000001&type=day&start_date=20241001&end_date=2024110
 **请求示例**:
 ```
 GET /api/index?code=sh000001&type=day
+```
+
+---
+
+### 11. 获取服务状态
+
+**接口**: `GET /api/server-status`
+
+**描述**: 返回API服务运行状态。
+
+**响应示例**:
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "status": "running",
+    "connected": true,
+    "version": "1.0.0",
+    "uptime": "unknown"
+  }
+}
 ```
 
 ---

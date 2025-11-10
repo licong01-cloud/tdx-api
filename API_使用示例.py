@@ -38,14 +38,14 @@ class StockAPI:
         return None
     
     def get_minute(self, code, date=None):
-        """获取分时数据"""
+        """获取分时数据（返回包含date/Count/List的字典）"""
         url = f"{self.base_url}/api/minute?code={code}"
         if date:
             url += f"&date={date}"
         response = requests.get(url)
         data = response.json()
         if data['code'] == 0:
-            return data['data']['List']
+            return data['data']
         return None
     
     def get_trade(self, code, date=None):
@@ -143,7 +143,7 @@ def example2_get_kline():
     klines = api.get_kline("000001", "day")
     
     if klines and len(klines) > 0:
-        print(f"获取到 {len(klines)} 条日K线数据")
+        print(f"获取到 {len(klines)} 条日K线数据（日/周/月为前复权）")
         
         # 显示最近5天的数据
         print("\n最近5天K线:")
@@ -180,7 +180,7 @@ def example3_search_stock():
     if results:
         print(f"找到 {len(results)} 只股票:")
         for stock in results:
-            print(f"  {stock['code']} - {stock['name']}")
+            print(f"  {stock['code']} ({stock.get('exchange','')}) - {stock['name']}")
 
 
 def example4_batch_quote():
