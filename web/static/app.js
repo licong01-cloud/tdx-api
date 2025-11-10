@@ -586,7 +586,16 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
     });
-    document.getElementById(tabName + 'Tab').classList.add('active');
+    const activeTab = document.getElementById(tabName + 'Tab');
+    activeTab.classList.add('active');
+
+    // 切换到图表时触发自适应，解决在隐藏容器中初始化导致的宽度问题
+    if (tabName === 'kline' && klineChart) {
+        setTimeout(() => klineChart.resize(), 0);
+    }
+    if (tabName === 'minute' && minuteChart) {
+        setTimeout(() => minuteChart.resize(), 0);
+    }
 }
 
 // 监听回车键搜索
