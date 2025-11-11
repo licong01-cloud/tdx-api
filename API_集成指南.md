@@ -21,6 +21,27 @@
 12. **GET /api/server-status** - 服务状态
 13. **GET /api/health** - 健康检查
 
+### ✅ 数据入库任务接口（5个）
+14. **POST /api/tasks/pull-kline** - 批量K线入库任务
+15. **POST /api/tasks/pull-trade** - 分时成交入库任务
+16. **GET /api/tasks** - 查询任务列表
+17. **GET /api/tasks/{id}** - 查询任务详情
+18. **POST /api/tasks/{id}/cancel** - 取消任务
+
+### ✅ 新增数据服务接口（12个）
+19. **GET /api/etf** - ETF基金列表
+20. **GET /api/trade-history** - 历史分时成交分页
+21. **GET /api/minute-trade-all** - 全天分时成交汇总
+22. **GET /api/workday** - 交易日信息查询
+23. **GET /api/market-count** - 各交易所证券数量
+24. **GET /api/stock-codes** - 全部股票代码
+25. **GET /api/etf-codes** - 全部ETF代码
+26. **GET /api/kline-all** - 股票历史K线全集
+27. **GET /api/index/all** - 指数历史K线全集
+28. **GET /api/trade-history/full** - 上市以来分时成交
+29. **GET /api/workday/range** - 交易日范围列表
+30. **GET /api/income** - 收益区间分析
+
 ---
 
 ## 🚀 如何集成扩展接口
@@ -49,9 +70,27 @@ func main() {
 	http.HandleFunc("/api/batch-quote", handleBatchQuote)
 	http.HandleFunc("/api/kline-history", handleGetKlineHistory)
 	http.HandleFunc("/api/index", handleGetIndex)
+	http.HandleFunc("/api/index/all", handleGetIndexAll)
 	http.HandleFunc("/api/market-stats", handleGetMarketStats)
+	http.HandleFunc("/api/market-count", handleGetMarketCount)
+	http.HandleFunc("/api/stock-codes", handleGetStockCodes)
+	http.HandleFunc("/api/etf-codes", handleGetETFCodes)
 	http.HandleFunc("/api/server-status", handleGetServerStatus)
 	http.HandleFunc("/api/health", handleHealthCheck)
+	http.HandleFunc("/api/etf", handleGetETFList)
+	http.HandleFunc("/api/trade-history", handleGetTradeHistory)
+	http.HandleFunc("/api/trade-history/full", handleGetTradeHistoryFull)
+	http.HandleFunc("/api/minute-trade-all", handleGetMinuteTradeAll)
+	http.HandleFunc("/api/kline-all", handleGetKlineAll)
+	http.HandleFunc("/api/workday", handleGetWorkday)
+	http.HandleFunc("/api/workday/range", handleGetWorkdayRange)
+	http.HandleFunc("/api/income", handleGetIncome)
+
+	// === 任务调度路由 ===
+	http.HandleFunc("/api/tasks/pull-kline", handleCreatePullKlineTask)
+	http.HandleFunc("/api/tasks/pull-trade", handleCreatePullTradeTask)
+	http.HandleFunc("/api/tasks", handleListTasks)
+	http.HandleFunc("/api/tasks/", handleTaskOperations)
 
 	port := ":8080"
 	log.Printf("服务启动成功，访问 http://localhost%s\n", port)
@@ -502,7 +541,7 @@ func setCache(key string, val interface{}) {
 ## ✅ 总结
 
 ### 已完成
-✅ 12个完整API接口  
+✅ 26个完整API接口  
 ✅ 详细的接口文档  
 ✅ 使用示例（Python/JavaScript/cURL）  
 ✅ 集成指南  

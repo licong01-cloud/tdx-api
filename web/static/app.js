@@ -258,6 +258,12 @@ function displayKline(data, type) {
     if (!klineChart) {
         klineChart = echarts.init(chartDom);
     }
+    if (!chartDom.offsetWidth || !chartDom.offsetHeight) {
+        // 容器尚未正确展示时强制设置默认尺寸
+        chartDom.style.width = '100%';
+        chartDom.style.height = '600px';
+        klineChart.resize();
+    }
     
     // 准备数据
     const dates = [];
@@ -395,6 +401,7 @@ function displayKline(data, type) {
     };
     
     klineChart.setOption(option);
+    klineChart.resize();
 }
 
 // 加载分时数据
@@ -522,6 +529,7 @@ function displayMinute(data) {
     };
     
     minuteChart.setOption(option);
+    minuteChart.resize();
 }
 
 // 加载分时成交
@@ -575,18 +583,31 @@ function displayTrade(data) {
 }
 
 // 切换标签页
-function switchTab(tabName) {
+function switchTab(evt, tabName) {
     // 更新标签按钮状态
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.remove('active');
     });
-    event.target.classList.add('active');
+    if (evt && evt.target) {
+        evt.target.classList.add('active');
+    }
     
     // 更新内容显示
     document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
     });
-    document.getElementById(tabName + 'Tab').classList.add('active');
+    const activeTab = document.getElementById(tabName + 'Tab');
+    activeTab.classList.add('active');
+
+    // 切换到图表时触发自适应，解决在隐藏容器中初始化导致的宽度问题
+    requestAnimationFrame(() => {
+        if (tabName === 'kline' && klineChart) {
+            setTimeout(() => klineChart.resize(), 50);
+        }
+        if (tabName === 'minute' && minuteChart) {
+            setTimeout(() => minuteChart.resize(), 50);
+        }
+    });
 }
 
 // 监听回车键搜索

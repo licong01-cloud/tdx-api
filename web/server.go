@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,7 +16,11 @@ import (
 	"github.com/injoyai/tdx/protocol"
 )
 
-var client *tdx.Client
+var (
+	client      *tdx.Client
+	manager     *tdx.Manage
+	taskManager = NewTaskManager()
+)
 
 func init() {
 	var err error
@@ -39,6 +45,20 @@ func init() {
 			log.Printf("已加载股票代码，共 %d 条", len(tdx.DefaultCodes.Map))
 		}
 	}
+
+	manager, err = tdx.NewManage(&tdx.ManageConfig{
+		Number: 4,
+	})
+	if err != nil {
+		log.Fatalf("初始化数据管理器失败: %v", err)
+	}
+	if err := manager.Codes.Update(); err != nil {
+		log.Printf("更新管理器代码库失败: %v", err)
+	}
+	if err := manager.Workday.Update(); err != nil {
+		log.Printf("更新交易日数据失败: %v", err)
+	}
+	manager.Cron.Start()
 }
 
 // Response 统一响应结构
@@ -149,9 +169,11 @@ func getQfqKlineDay(code string) (*protocol.KlineResp, error) {
 	// 使用同花顺API获取前复权数据
 	klines, err := extend.GetTHSDayKline(code, extend.THS_QFQ)
 	if err != nil {
-		// 如果同花顺API失败，降级使用通达信不复权数据
-		log.Printf("获取前复权数据失败，使用不复权数据: %v", err)
-		return client.GetKlineDay(code, 0, 800)
+		return nil, fmt.Errorf("获取前复权数据失败: %w", err)
+	}
+
+	if len(klines) == 0 {
+		return nil, fmt.Errorf("同花顺前复权数据为空")
 	}
 
 	// 转换为 protocol.KlineResp 格式
@@ -448,6 +470,181 @@ func handleGetStockInfo(w http.ResponseWriter, r *http.Request) {
 	successResponse(w, result)
 }
 
+func handleCreatePullKlineTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, "只支持POST请求")
+		return
+	}
+	if manager == nil {
+		errorResponse(w, "数据管理器未初始化")
+		return
+	}
+
+	var req struct {
+		Codes     []string `json:"codes"`
+		Tables    []string `json:"tables"`
+		Dir       string   `json:"dir"`
+		Limit     int      `json:"limit"`
+		StartDate string   `json:"start_date"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, "请求参数错误: "+err.Error())
+		return
+	}
+
+	tables := req.Tables
+	if len(tables) == 0 {
+		tables = []string{extend.Day}
+	} else {
+		valid := make([]string, 0, len(tables))
+		for _, v := range tables {
+			if _, ok := extend.KlineTableMap[v]; ok {
+				valid = append(valid, v)
+			}
+		}
+		if len(valid) == 0 {
+			errorResponse(w, "tables参数无效")
+			return
+		}
+		tables = valid
+	}
+
+	dir := req.Dir
+	if dir == "" {
+		dir = filepath.Join(tdx.DefaultDatabaseDir, "kline")
+	}
+
+	startAt := time.Unix(0, 0)
+	if req.StartDate != "" {
+		var parsed bool
+		for _, layout := range []string{"2006-01-02", "20060102"} {
+			if t, err := time.ParseInLocation(layout, req.StartDate, time.Local); err == nil {
+				startAt = t
+				parsed = true
+				break
+			}
+		}
+		if !parsed {
+			errorResponse(w, "start_date格式错误，应为YYYY-MM-DD或YYYYMMDD")
+			return
+		}
+	}
+
+	cfg := extend.PullKlineConfig{
+		Codes:   req.Codes,
+		Tables:  tables,
+		Dir:     dir,
+		Limit:   req.Limit,
+		StartAt: startAt,
+	}
+
+	puller := extend.NewPullKline(cfg)
+
+	taskID := taskManager.Run("pull_kline", func(ctx context.Context) error {
+		return puller.Run(ctx, manager)
+	})
+
+	successResponse(w, map[string]string{
+		"task_id": taskID,
+	})
+}
+
+func handleCreatePullTradeTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		errorResponse(w, "只支持POST请求")
+		return
+	}
+	if manager == nil {
+		errorResponse(w, "数据管理器未初始化")
+		return
+	}
+
+	var req struct {
+		Code      string `json:"code"`
+		Dir       string `json:"dir"`
+		StartYear int    `json:"start_year"`
+		EndYear   int    `json:"end_year"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		errorResponse(w, "请求参数错误: "+err.Error())
+		return
+	}
+
+	if req.Code == "" {
+		errorResponse(w, "code不能为空")
+		return
+	}
+
+	dir := req.Dir
+	if dir == "" {
+		dir = filepath.Join(tdx.DefaultDatabaseDir, "trade")
+	}
+
+	puller := extend.NewPullTrade(dir)
+	puller.StartYear = req.StartYear
+	puller.EndYear = req.EndYear
+
+	taskID := taskManager.Run("pull_trade", func(ctx context.Context) error {
+		return puller.Pull(ctx, manager, req.Code)
+	})
+
+	successResponse(w, map[string]string{
+		"task_id": taskID,
+	})
+}
+
+func handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		errorResponse(w, "只支持GET请求")
+		return
+	}
+
+	tasks := taskManager.List()
+	successResponse(w, tasks)
+}
+
+func handleTaskOperations(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	id := parts[0]
+
+	if len(parts) == 2 && parts[1] == "cancel" {
+		if r.Method != http.MethodPost {
+			errorResponse(w, "取消任务仅支持POST")
+			return
+		}
+		if ok := taskManager.Cancel(id); !ok {
+			errorResponse(w, "任务不存在或已结束")
+			return
+		}
+		successResponse(w, map[string]string{
+			"task_id": id,
+			"status":  string(TaskStatusCancelled),
+		})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		errorResponse(w, "只支持GET请求")
+		return
+	}
+
+	if task, ok := taskManager.Get(id); ok {
+		successResponse(w, task)
+		return
+	}
+
+	errorResponse(w, "任务不存在")
+}
+
 func splitCodes(param string) []string {
 	parts := strings.Split(param, ",")
 	result := make([]string, 0, len(parts))
@@ -461,6 +658,15 @@ func splitCodes(param string) []string {
 }
 
 func getMinuteWithFallback(code, date string) (*protocol.MinuteResp, string, error) {
+	target := strings.TrimSpace(date)
+	if target == "" {
+		target = time.Now().Format("20060102")
+		resp, err := client.GetMinute(code)
+		return resp, target, err
+	}
+
+	resp, err := client.GetHistoryMinute(target, code)
+	return resp, target, err
 	if date != "" {
 		resp, err := client.GetHistoryMinute(date, code)
 		return resp, date, err
@@ -513,6 +719,27 @@ func main() {
 	http.HandleFunc("/api/batch-quote", handleBatchQuote)
 	http.HandleFunc("/api/kline-history", handleGetKlineHistory)
 	http.HandleFunc("/api/index", handleGetIndex)
+	http.HandleFunc("/api/index/all", handleGetIndexAll)
+	http.HandleFunc("/api/market-stats", handleGetMarketStats)
+	http.HandleFunc("/api/market-count", handleGetMarketCount)
+	http.HandleFunc("/api/stock-codes", handleGetStockCodes)
+	http.HandleFunc("/api/etf-codes", handleGetETFCodes)
+	http.HandleFunc("/api/server-status", handleGetServerStatus)
+	http.HandleFunc("/api/health", handleHealthCheck)
+	http.HandleFunc("/api/etf", handleGetETFList)
+	http.HandleFunc("/api/trade-history", handleGetTradeHistory)
+	http.HandleFunc("/api/trade-history/full", handleGetTradeHistoryFull)
+	http.HandleFunc("/api/minute-trade-all", handleGetMinuteTradeAll)
+	http.HandleFunc("/api/kline-all", handleGetKlineAllTDX)
+	http.HandleFunc("/api/kline-all/tdx", handleGetKlineAllTDX)
+	http.HandleFunc("/api/kline-all/ths", handleGetKlineAllTHS)
+	http.HandleFunc("/api/workday", handleGetWorkday)
+	http.HandleFunc("/api/workday/range", handleGetWorkdayRange)
+	http.HandleFunc("/api/income", handleGetIncome)
+	http.HandleFunc("/api/tasks/pull-kline", handleCreatePullKlineTask)
+	http.HandleFunc("/api/tasks/pull-trade", handleCreatePullTradeTask)
+	http.HandleFunc("/api/tasks", handleListTasks)
+	http.HandleFunc("/api/tasks/", handleTaskOperations)
 	http.HandleFunc("/api/market-stats", handleGetMarketStats)
 	http.HandleFunc("/api/server-status", handleGetServerStatus)
 	http.HandleFunc("/api/health", handleHealthCheck)

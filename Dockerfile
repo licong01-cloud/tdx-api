@@ -20,7 +20,7 @@ RUN go mod download
 
 # 编译web应用
 WORKDIR /app/web
-RUN go mod tidy && go build -ldflags="-s -w" -o stock-web server.go
+RUN go mod tidy && go build -ldflags="-s -w" -o stock-web .
 
 # 多阶段构建 - 第二阶段：运行
 FROM alpine:latest

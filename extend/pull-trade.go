@@ -17,11 +17,22 @@ func NewPullTrade(dir string) *PullTrade {
 }
 
 type PullTrade struct {
-	Dir string
+	Dir       string
+	StartYear int
+	EndYear   int
 }
 
 func (this *PullTrade) Pull(ctx context.Context, m *tdx.Manage, code string) error {
-	for i := 2000; i <= time.Now().Year(); i++ {
+	startYear := this.StartYear
+	if startYear <= 0 {
+		startYear = 2000
+	}
+	endYear := this.EndYear
+	if endYear <= 0 {
+		endYear = time.Now().Year()
+	}
+
+	for i := startYear; i <= endYear; i++ {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
