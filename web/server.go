@@ -667,6 +667,41 @@ func getMinuteWithFallback(code, date string) (*protocol.MinuteResp, string, err
 
 	resp, err := client.GetHistoryMinute(target, code)
 	return resp, target, err
+	if date != "" {
+		resp, err := client.GetHistoryMinute(date, code)
+		return resp, date, err
+	}
+
+	today := time.Now()
+	const maxLookback = 10
+
+	var lastResp *protocol.MinuteResp
+	var lastDate string
+	var lastErr error
+
+	for i := 0; i < maxLookback; i++ {
+		currentDate := today.AddDate(0, 0, -i).Format("20060102")
+		resp, err := client.GetHistoryMinute(currentDate, code)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp != nil {
+			if len(resp.List) > 0 && resp.Count > 0 {
+				return resp, currentDate, nil
+			}
+			if lastResp == nil {
+				lastResp = resp
+				lastDate = currentDate
+			}
+		}
+	}
+
+	if lastResp != nil {
+		return lastResp, lastDate, nil
+	}
+
+	return nil, "", lastErr
 }
 
 func main() {
@@ -705,6 +740,9 @@ func main() {
 	http.HandleFunc("/api/tasks/pull-trade", handleCreatePullTradeTask)
 	http.HandleFunc("/api/tasks", handleListTasks)
 	http.HandleFunc("/api/tasks/", handleTaskOperations)
+	http.HandleFunc("/api/market-stats", handleGetMarketStats)
+	http.HandleFunc("/api/server-status", handleGetServerStatus)
+	http.HandleFunc("/api/health", handleHealthCheck)
 
 	port := ":8080"
 	log.Printf("服务启动成功，访问 http://localhost%s\n", port)

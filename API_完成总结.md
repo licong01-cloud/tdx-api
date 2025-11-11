@@ -147,6 +147,9 @@ curl "http://localhost:8080/api/search?keyword=平安"
 
 当前仓库已集成所有扩展API；若需要迁移到其他工程，可参考：
 
+
+当前仓库已集成所有扩展API；若需要迁移到其他工程，可参考：
+
 1. **复制代码**：将 `web/server_api_extended.go` 中的函数与辅助方法拷贝到目标服务。  
 2. **注册路由**：在 `main()` 中添加 `/api/codes`、`/api/batch-quote`、`/api/kline-history`、`/api/index`、`/api/market-stats`、`/api/server-status`、`/api/health` 等路由。  
 3. **重建部署**：重新编译或重启服务。详细说明见 `API_集成指南.md`。
