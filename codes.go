@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"xorm.io/core"
 	"xorm.io/xorm"
@@ -336,20 +337,55 @@ func (this *CodeModel) Price(p protocol.Price) protocol.Price {
 	//return p * protocol.Price(math.Pow10(int(2-this.Decimal)))
 }
 
+// isSQLiteBusy 粗略判断是否为 SQLite Busy / database is locked 错误
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "SQLITE_BUSY")
+}
+
+// NewSessionFunc 增加对 SQLITE_BUSY 的简单重试，避免瞬时锁冲突导致整个任务失败。
 func NewSessionFunc(db *xorm.Engine, fn func(session *xorm.Session) error) error {
-	session := db.NewSession()
-	defer session.Close()
-	if err := session.Begin(); err != nil {
-		session.Rollback()
-		return err
+	// 对于 sqlite3，容易遇到 database is locked，这里做有限次重试
+	const maxRetry = 5
+	for attempt := 0; attempt < maxRetry; attempt++ {
+		session := db.NewSession()
+		// 不使用 defer，避免在重试循环中堆积
+		if err := session.Begin(); err != nil {
+			session.Rollback()
+			session.Close()
+			if isSQLiteBusy(err) && attempt+1 < maxRetry {
+				// 简单线性退避：200ms, 400ms, ...
+				time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		if err := fn(session); err != nil {
+			session.Rollback()
+			session.Close()
+			if isSQLiteBusy(err) && attempt+1 < maxRetry {
+				time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		if err := session.Commit(); err != nil {
+			session.Rollback()
+			session.Close()
+			if isSQLiteBusy(err) && attempt+1 < maxRetry {
+				time.Sleep(time.Duration(200*(attempt+1)) * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		session.Close()
+		return nil
 	}
-	if err := fn(session); err != nil {
-		session.Rollback()
-		return err
-	}
-	if err := session.Commit(); err != nil {
-		session.Rollback()
-		return err
-	}
-	return nil
+	return errors.New("sqlite busy after retries")
 }

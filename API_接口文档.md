@@ -439,7 +439,7 @@ curl -X POST http://localhost:8080/api/batch-quote \
 
 **接口**: `GET /api/kline-history`
 
-**描述**: 获取指定时间范围的K线数据
+**描述**: 获取指定时间范围的K线数据。**日/周/月K线返回前复权数据**，分钟级及小时级K线为原始数据（不复权）。
 
 **请求参数**:
 | 参数 | 类型 | 必填 | 说明 |
@@ -455,6 +455,12 @@ curl -X POST http://localhost:8080/api/batch-quote \
 GET /api/kline-history?code=000001&type=day&limit=30
 GET /api/kline-history?code=000001&type=day&start_date=20241001&end_date=20241101
 ```
+
+**数据说明**:
+- 日K线（`type=day`）：返回前复权数据
+- 周K线（`type=week`）：返回前复权数据（由前复权日K线转换）
+- 月K线（`type=month`）：返回前复权数据（由前复权日K线转换）
+- 分钟/小时K线：返回原始数据（不复权）
 
 ---
 
@@ -847,6 +853,14 @@ curl -X POST http://localhost:8080/api/tasks/pull-trade \
 
 **注意**: 全量数据较大，建议配合 `limit` 控制响应大小。
 
+**典型场景：按年份批量拉取**
+- 需求：一次性拿到单只股票在某个自然年的全部日 K 或分钟 K。
+- 操作：调用 `/api/kline-all/tdx`，指定 `type` 与 `limit`，例如：
+  - `GET /api/kline-all/tdx?code=600519&type=day&limit=366` → 最近约一年的日 K。
+  - `GET /api/kline-all/tdx?code=600519&type=minute1&limit=240*250` → 预估 250 个交易日的一分钟 K。
+- 结果：接口会把底层 800 条分页自动拼接成时间正序全量列表，调用方只需根据时间戳或交易日过滤出目标自然年的数据。
+- 如需前复权日/周/月的年维度数据，可换用 `/api/kline-all/ths`，参数与上述一致。
+
 ---
 
 ### 23. 获取指数全部历史K线
@@ -1056,6 +1070,19 @@ curl -X POST http://localhost:8080/api/batch-quote \
 
 为了区分不同数据源，并方便调用方自行决定兜底策略，历史K线提供以下两个独立接口，返回格式完全一致：
 
+### 📋 未复权日线接口汇总
+
+**获取未复权日线的接口**：
+
+| 接口 | 数据源 | 时间范围定义方式 | 说明 |
+|------|--------|------------------|------|
+| `GET /api/kline-all/tdx` | 通达信原始数据 | 通过 `limit` 参数控制返回最近N条 | 返回全部历史数据，按 `limit` 截取最近N条；不支持直接指定起止日期，需客户端按时间过滤 |
+
+**注意**：
+- `/api/kline-all` 接口对于日线返回的是**前复权**数据（非未复权）
+- `/api/kline-history` 接口返回的是**前复权**数据（非未复权）
+- 如需未复权日线，请使用 `/api/kline-all/tdx?type=day`
+
 ### 1. 通达信原始历史K线
 
 **接口**: `GET /api/kline-all/tdx`
@@ -1068,6 +1095,13 @@ curl -X POST http://localhost:8080/api/batch-quote \
 | code | string | 是 | 股票代码（6位数字） |
 | type | string | 否 | 默认 `day`，取值同 `/api/kline` |
 | limit | int | 否 | 结果截断条数（从末尾取最近N条），默认返回全量 |
+
+**时间范围定义**:
+- **不支持直接指定时间范围**（无 `start_date`/`end_date` 参数）
+- 通过 `limit` 参数控制返回最近N条数据（从最新日期往前取）
+- 如需指定时间范围，可：
+  1. 不传 `limit` 获取全量数据，然后在客户端按 `Time` 字段过滤
+  2. 根据交易日数量估算 `limit` 值（如一年约250个交易日，设置 `limit=250`）
 
 **响应示例**:
 ```json
