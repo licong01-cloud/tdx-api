@@ -700,6 +700,7 @@ func main() {
 	http.HandleFunc("/api/tasks/pull-trade", handleCreatePullTradeTask)
 	http.HandleFunc("/api/tasks/ingest-minute-raw-init", handleCreateMinuteRawInitTask)
 	http.HandleFunc("/api/tasks/ingest-daily-raw-init", handleCreateDailyRawInitTask)
+	http.HandleFunc("/api/tasks/ingest-daily-qfq-init", handleCreateDailyQfqInitTask)
 	http.HandleFunc("/api/tasks", handleListTasks)
 	http.HandleFunc("/api/tasks/", handleTaskOperations)
 
